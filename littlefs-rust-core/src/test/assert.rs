@@ -23,7 +23,7 @@ pub fn assert_block_has_magic(config: *const LfsConfig, block: u32) {
     assert_eq!(
         &got, MAGIC,
         "block {}: expected MAGIC at offset {}, got {:?}",
-        block, MAGIC_OFFSET, &got
+        block, MAGIC_OFFSET, got
     );
 }
 

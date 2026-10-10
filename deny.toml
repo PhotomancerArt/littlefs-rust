@@ -15,3 +15,8 @@ allow = [
 multiple-versions = "deny"
 wildcards = "allow"
 deny = []
+skip = [
+    # littlefs-rust-compat build deps (bindgen 0.70 and cc 1.6, via
+    # littlefs2-sys) pull shlex 1.x and 2.x. Test-only crate, not published.
+    { crate = "shlex@1.3.0", reason = "bindgen 0.70 build dep of littlefs-rust-compat" },
+]

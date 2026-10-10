@@ -649,8 +649,8 @@ fn test_alloc_exhaustion_wraparound(#[values(false, true)] infer_bc: bool) {
     let mut env = default_config(128);
     init_context(&mut env);
 
-    let block_size = env.config.block_size as u32;
-    let block_count = env.config.block_count as u32;
+    let block_size = env.config.block_size;
+    let block_count = env.config.block_count;
     let size: usize = ((block_size - 8) as usize * (block_count - 4) as usize) / 3;
 
     let mut lfs = core::mem::MaybeUninit::<Lfs>::zeroed();
@@ -882,7 +882,7 @@ fn test_alloc_two_files_ctz() {
     init_logger();
     let mut env = default_config(48);
     init_context(&mut env);
-    let block_size = env.config.block_size as u32;
+    let block_size = env.config.block_size;
 
     let mut lfs = core::mem::MaybeUninit::<Lfs>::zeroed();
     assert_ok(lfs_format(
@@ -999,7 +999,7 @@ fn test_alloc_bad_blocks_body() {
     let mut env = config_badblock(128);
     init_badblock_context(&mut env);
 
-    let block_size = env.config.block_size as u32;
+    let block_size = env.config.block_size;
 
     let mut lfs = core::mem::MaybeUninit::<Lfs>::zeroed();
     assert_ok(lfs_format(
