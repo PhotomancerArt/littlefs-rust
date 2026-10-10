@@ -1,6 +1,8 @@
 use std::string::String;
 
-use littlefs_rust::{Config, Error, FileType, Filesystem, OpenFlags, RamStorage, SeekFrom};
+use littlefs_rust::{
+    Config, Error, FileType, Filesystem, OpenFlags, RamStorage, SeekFrom, Storage,
+};
 
 fn format_and_mount() -> Filesystem<RamStorage> {
     let mut storage = RamStorage::new(512, 128);
@@ -369,4 +371,75 @@ fn test_nested_dirs() {
     assert_eq!(data, b"nested");
 
     fs.unmount().unwrap();
+}
+
+#[test]
+fn test_inline_rewrites_append_commits_instead_of_compacting() {
+    let fs = format_and_mount_counting(4096, 64);
+    let data = vec![0x5A; 350];
+
+    for i in 0..200 {
+        fs.write_file("/state.bin", &data)
+            .unwrap_or_else(|e| panic!("rewrite {i} failed: {e:?}"));
+    }
+    assert_eq!(fs.read_to_vec("/state.bin").unwrap(), data);
+
+    let storage = fs.unmount().expect("unmount");
+    // Compacting on every commit would erase at least one block per rewrite.
+    assert!(
+        storage.erases < 50,
+        "200 inline rewrites erased {} blocks; commits are not being appended",
+        storage.erases
+    );
+}
+
+#[test]
+fn test_small_rewrites_fill_block_past_256_tags() {
+    let fs = format_and_mount_counting(4096, 64);
+
+    for i in 0u32..1000 {
+        fs.write_file("/n", &i.to_le_bytes())
+            .unwrap_or_else(|e| panic!("rewrite {i} failed: {e:?}"));
+    }
+
+    let storage = fs.unmount().expect("unmount");
+    let fs = Filesystem::mount(storage, Config::new(4096, 64))
+        .map_err(|(e, _)| e)
+        .expect("remount");
+    assert_eq!(fs.read_to_vec("/n").unwrap(), 999u32.to_le_bytes());
+    fs.unmount().expect("unmount");
+}
+
+fn format_and_mount_counting(block_size: u32, block_count: u32) -> Filesystem<CountingStorage> {
+    let mut storage = CountingStorage {
+        inner: RamStorage::new(block_size, block_count),
+        erases: 0,
+    };
+    let config = Config::new(block_size, block_count);
+    Filesystem::format(&mut storage, &config).expect("format");
+    storage.erases = 0;
+    Filesystem::mount(storage, config)
+        .map_err(|(e, _)| e)
+        .expect("mount")
+}
+
+/// RamStorage wrapper that counts block erases.
+struct CountingStorage {
+    inner: RamStorage,
+    erases: u32,
+}
+
+impl Storage for CountingStorage {
+    fn read(&mut self, block: u32, offset: u32, buf: &mut [u8]) -> Result<(), Error> {
+        self.inner.read(block, offset, buf)
+    }
+
+    fn write(&mut self, block: u32, offset: u32, data: &[u8]) -> Result<(), Error> {
+        self.inner.write(block, offset, data)
+    }
+
+    fn erase(&mut self, block: u32) -> Result<(), Error> {
+        self.erases += 1;
+        self.inner.erase(block)
+    }
 }

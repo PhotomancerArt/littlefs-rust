@@ -26,6 +26,9 @@ pub struct RamStorage {
     pub data: Vec<u8>,
     pub block_size: u32,
     pub block_count: u32,
+    /// Panic on a prog to bytes that are not erased (0xff), as upstream
+    /// lfs_emubd does. Off by default; some tests rewrite blocks in place.
+    pub assert_erased_prog: bool,
 }
 
 impl RamStorage {
@@ -37,6 +40,7 @@ impl RamStorage {
             data: vec![0u8; size],
             block_size,
             block_count,
+            assert_erased_prog: false,
         }
     }
 
@@ -57,6 +61,14 @@ impl RamStorage {
         let base = self.block_offset(block);
         let start = base + off as usize;
         let end = start + buf.len();
+        if self.assert_erased_prog {
+            if let Some(i) = self.data[start..end].iter().position(|&b| b != 0xff) {
+                panic!(
+                    "prog to non-erased byte: block {block} off {}",
+                    off as usize + i
+                );
+            }
+        }
         self.data[start..end].copy_from_slice(buf);
     }
 

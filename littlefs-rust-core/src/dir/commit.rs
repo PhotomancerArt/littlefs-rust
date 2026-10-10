@@ -340,6 +340,8 @@ pub fn lfs_dir_commitattr(
 pub fn lfs_dir_commitcrc(lfs: *mut crate::fs::Lfs, commit: *mut LfsCommit) -> i32 {
     use crate::bd::bd::{lfs_bd_crc, lfs_bd_prog, lfs_bd_sync};
     use crate::crc::lfs_crc;
+    use crate::dir::lfs_fcrc::lfs_fcrc_tole32;
+    use crate::dir::LfsFcrc;
     use crate::error::LFS_ERR_CORRUPT;
     use crate::tag::lfs_mktag;
     use crate::util::{lfs_alignup, lfs_min, lfs_tobe32, lfs_tole32};
@@ -376,6 +378,45 @@ pub fn lfs_dir_commitcrc(lfs: *mut crate::fs::Lfs, commit: *mut LfsCommit) -> i3
                     1,
                 );
                 if err != 0 && err != crate::error::LFS_ERR_CORRUPT {
+                    return crate::lfs_pass_err!(err);
+                }
+
+                // C: the LFS_MULTIVERSION branch that skips the fcrc on
+                // lfs2.0 disks is not ported; lfs_dir_fetchmatch likewise
+                // omits it, and this port always formats lfs2.1 disks.
+
+                // find the expected fcrc, don't bother avoiding a reread
+                // of the eperturb, it should still be in our cache
+                let mut fcrc = LfsFcrc {
+                    size: prog_size,
+                    crc: 0xffff_ffff,
+                };
+                let err = lfs_bd_crc(
+                    lfs,
+                    core::ptr::null(),
+                    &mut (*lfs).rcache,
+                    prog_size,
+                    (*commit).block,
+                    noff,
+                    fcrc.size,
+                    &mut fcrc.crc,
+                );
+                if err != 0 && err != crate::error::LFS_ERR_CORRUPT {
+                    return crate::lfs_pass_err!(err);
+                }
+
+                lfs_fcrc_tole32(&mut fcrc);
+                let err = lfs_dir_commitattr(
+                    lfs,
+                    commit,
+                    lfs_mktag(
+                        crate::lfs_type::lfs_type::LFS_TYPE_FCRC,
+                        0x3ff,
+                        core::mem::size_of::<LfsFcrc>() as u32,
+                    ),
+                    &fcrc as *const LfsFcrc as *const core::ffi::c_void,
+                );
+                if err != 0 {
                     return crate::lfs_pass_err!(err);
                 }
             }
