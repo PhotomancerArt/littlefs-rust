@@ -522,9 +522,12 @@ pub fn lfs_dir_fetchmatch(
                     } else if tempbesttag != -1
                         && lfs_tag_id(tag) <= lfs_tag_id(tempbesttag as lfs_tag_t)
                     {
-                        tempbesttag = (tempbesttag as lfs_tag_t
-                            + lfs_mktag(0, lfs_tag_splice(tag) as u32, 0))
-                            as lfs_stag_t;
+                        // C adds the (possibly negative) splice with unsigned wrap.
+                        tempbesttag = (tempbesttag as lfs_tag_t).wrapping_add(lfs_mktag(
+                            0,
+                            lfs_tag_splice(tag) as u32,
+                            0,
+                        )) as lfs_stag_t;
                     }
                 } else if u32::from(lfs_tag_type1(tag)) == LFS_TYPE_TAIL {
                     tempsplit = (lfs_tag_chunk(tag) & 1) != 0;
