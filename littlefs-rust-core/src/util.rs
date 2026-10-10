@@ -59,7 +59,9 @@ pub fn lfs_aligndown(a: u32, alignment: u32) -> u32 {
 /// ```
 #[inline(always)]
 pub fn lfs_alignup(a: u32, alignment: u32) -> u32 {
-    lfs_aligndown(a + alignment - 1, alignment)
+    // uint32_t arithmetic in C wraps; lfs_dir_alloc relies on this when the
+    // revision count read from an erased block is 0xffffffff.
+    lfs_aligndown(a.wrapping_add(alignment).wrapping_sub(1), alignment)
 }
 
 /// Per lfs_util.h lfs_npw2 (lines 147-161) - smallest power of 2 >= a

@@ -389,15 +389,19 @@ pub fn lfs_dir_fetchmatch(
 
             #[cfg(feature = "loop_limits")]
             let mut tag_iter: u32 = 0;
+            // Each tag occupies at least 4 bytes and the walk stops at the end
+            // of the block, so a block holds at most block_size/4 tags. Appended
+            // commits (each with its own fcrc and ccrc) can fill a block with
+            // far more than a fixed small cap allows.
             #[cfg(feature = "loop_limits")]
-            const MAX_FETCH_TAG_ITER: u32 = 256;
+            let max_fetch_tag_iter: u32 = cfg.block_size / 4 + 1;
             loop {
                 #[cfg(feature = "loop_limits")]
                 {
-                    if tag_iter >= MAX_FETCH_TAG_ITER {
+                    if tag_iter >= max_fetch_tag_iter {
                         panic!(
-                            "loop_limits: MAX_FETCH_TAG_ITER ({}) exceeded",
-                            MAX_FETCH_TAG_ITER
+                            "loop_limits: max_fetch_tag_iter ({}) exceeded",
+                            max_fetch_tag_iter
                         );
                     }
                     if tag_iter > 0 && tag_iter.is_multiple_of(32) {
@@ -522,9 +526,12 @@ pub fn lfs_dir_fetchmatch(
                     } else if tempbesttag != -1
                         && lfs_tag_id(tag) <= lfs_tag_id(tempbesttag as lfs_tag_t)
                     {
-                        tempbesttag = (tempbesttag as lfs_tag_t
-                            + lfs_mktag(0, lfs_tag_splice(tag) as u32, 0))
-                            as lfs_stag_t;
+                        // C adds the (possibly negative) splice with unsigned wrap.
+                        tempbesttag = (tempbesttag as lfs_tag_t).wrapping_add(lfs_mktag(
+                            0,
+                            lfs_tag_splice(tag) as u32,
+                            0,
+                        )) as lfs_stag_t;
                     }
                 } else if u32::from(lfs_tag_type1(tag)) == LFS_TYPE_TAIL {
                     tempsplit = (lfs_tag_chunk(tag) & 1) != 0;
