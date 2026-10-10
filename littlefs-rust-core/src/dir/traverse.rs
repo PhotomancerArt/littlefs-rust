@@ -106,17 +106,19 @@ pub fn lfs_dir_getslice(
             }
         }
 
+        // Each step moves back at least one 4-byte tag, so the walk is bounded
+        // by the committed size of the block.
         #[cfg(feature = "loop_limits")]
-        const MAX_GETSLICE_TAG_ITER: u32 = 2048;
+        let max_getslice_tag_iter: u32 = dir_ref.off / 4 + 1;
         #[cfg(feature = "loop_limits")]
         let mut tag_iter: u32 = 0;
         while off >= 4 + lfs_tag_dsize(ntag) {
             #[cfg(feature = "loop_limits")]
             {
-                if tag_iter >= MAX_GETSLICE_TAG_ITER {
+                if tag_iter >= max_getslice_tag_iter {
                     panic!(
-                        "loop_limits: MAX_GETSLICE_TAG_ITER ({}) exceeded",
-                        MAX_GETSLICE_TAG_ITER
+                        "loop_limits: max_getslice_tag_iter ({}) exceeded",
+                        max_getslice_tag_iter
                     );
                 }
                 tag_iter += 1;
