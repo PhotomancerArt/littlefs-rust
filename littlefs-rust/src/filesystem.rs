@@ -16,8 +16,10 @@ use crate::storage::Storage;
 
 pub(crate) struct FsInner<S: Storage> {
     pub(crate) lfs: MaybeUninit<Lfs>,
-    pub(crate) config: LfsConfig,
-    pub(crate) storage: S,
+    // Core retains pointers to the configuration and storage across wrapper
+    // borrows. Keep their pointees separate from mutable FsInner reborrows.
+    pub(crate) config: Box<LfsConfig>,
+    pub(crate) storage: Box<S>,
     _read_buf: Vec<u8>,
     _prog_buf: Vec<u8>,
     _lookahead_buf: Vec<u8>,
@@ -125,8 +127,8 @@ fn build_inner<S: Storage>(storage: S, config: &Config) -> FsInner<S> {
 
     FsInner {
         lfs: MaybeUninit::zeroed(),
-        config: lfs_config,
-        storage,
+        config: Box::new(lfs_config),
+        storage: Box::new(storage),
         _read_buf: read_buf,
         _prog_buf: prog_buf,
         _lookahead_buf: lookahead_buf,
@@ -137,7 +139,7 @@ fn build_inner<S: Storage>(storage: S, config: &Config) -> FsInner<S> {
 /// Wire `config.context` to point at `inner.storage`. Must be called after
 /// `inner` is at its final address (i.e., inside the `RefCell`).
 fn wire_context<S: Storage>(inner: &mut FsInner<S>) {
-    inner.config.context = &mut inner.storage as *mut S as *mut c_void;
+    inner.config.context = &mut *inner.storage as *mut S as *mut c_void;
     inner.config.read_buffer = inner._read_buf.as_mut_ptr() as *mut c_void;
     inner.config.prog_buffer = inner._prog_buf.as_mut_ptr() as *mut c_void;
     inner.config.lookahead_buffer = inner._lookahead_buf.as_mut_ptr() as *mut c_void;
@@ -169,10 +171,10 @@ impl<S: Storage> Filesystem<S> {
         wire_context(&mut inner);
         let rc = littlefs_rust_core::lfs_mount(
             inner.lfs.as_mut_ptr(),
-            &inner.config as *const LfsConfig,
+            &*inner.config as *const LfsConfig,
         );
         if rc != 0 {
-            return Err((Error::from(rc), inner.storage));
+            return Err((Error::from(rc), *inner.storage));
         }
         inner.mounted = true;
         Ok(Filesystem {
@@ -198,7 +200,7 @@ impl<S: Storage> Filesystem<S> {
         // already unmounted. Take ownership of the RefCell's contents.
         let fs_inner = unsafe { core::ptr::read(&this.inner) }.into_inner();
         from_lfs_result(rc)?;
-        Ok(fs_inner.storage)
+        Ok(*fs_inner.storage)
     }
 
     pub(crate) fn cache_size(&self) -> u32 {

@@ -326,16 +326,22 @@ pub fn lfs_dir_fetchmatch(
     const LFS_CMP_GT: i32 = 2;
 
     unsafe {
-        let lfs = &mut *(_lfs as *mut crate::fs::Lfs);
+        // `pair` may point into `dir`, as in the format sanity check.
+        // Snapshot it before borrowing or changing the directory.
+        let pair = *_pair;
+        // Match callbacks may use the original filesystem pointer and mutate
+        // its caches. Do not hold a whole-filesystem reference across them.
+        let lfs = _lfs as *mut crate::fs::Lfs;
         let dir = &mut *_dir;
-        let pair = &*_pair;
-        let cfg = &*lfs.cfg;
+        let cfg = &*(*lfs).cfg;
 
         let mut besttag: lfs_stag_t = -1;
         crate::lfs_trace!("fetchmatch: start pair={:?}", pair);
 
         // block_count check (C: lines 1117-1120)
-        if lfs.block_count != 0 && (pair[0] >= lfs.block_count || pair[1] >= lfs.block_count) {
+        if (*lfs).block_count != 0
+            && (pair[0] >= (*lfs).block_count || pair[1] >= (*lfs).block_count)
+        {
             return crate::lfs_err!(LFS_ERR_CORRUPT as lfs_stag_t);
         }
 
@@ -348,7 +354,7 @@ pub fn lfs_dir_fetchmatch(
             let err = lfs_bd_read(
                 lfs,
                 core::ptr::null(),
-                &mut lfs.rcache,
+                &mut (*lfs).rcache,
                 4,
                 pair[i],
                 0,
@@ -422,7 +428,7 @@ pub fn lfs_dir_fetchmatch(
                 let err = lfs_bd_read(
                     lfs,
                     core::ptr::null(),
-                    &mut lfs.rcache,
+                    &mut (*lfs).rcache,
                     cfg.block_size,
                     dir.pair[0],
                     off,
@@ -454,7 +460,7 @@ pub fn lfs_dir_fetchmatch(
                     let err = lfs_bd_read(
                         lfs,
                         core::ptr::null(),
-                        &mut lfs.rcache,
+                        &mut (*lfs).rcache,
                         cfg.block_size,
                         dir.pair[0],
                         off + 4,
@@ -475,7 +481,7 @@ pub fn lfs_dir_fetchmatch(
 
                     ptag ^= (lfs_tag_chunk(tag) as lfs_tag_t & 1) << 31;
 
-                    lfs.seed = lfs_crc(lfs.seed, &crc as *const _ as *const u8, 4);
+                    (*lfs).seed = lfs_crc((*lfs).seed, &crc as *const _ as *const u8, 4);
 
                     besttag = tempbesttag;
                     dir.off = off + lfs_tag_dsize(tag);
@@ -494,7 +500,7 @@ pub fn lfs_dir_fetchmatch(
                 let err = lfs_bd_crc(
                     lfs,
                     core::ptr::null(),
-                    &mut lfs.rcache,
+                    &mut (*lfs).rcache,
                     cfg.block_size,
                     dir.pair[0],
                     off + 4,
@@ -540,7 +546,7 @@ pub fn lfs_dir_fetchmatch(
                     let err = lfs_bd_read(
                         lfs,
                         core::ptr::null(),
-                        &mut lfs.rcache,
+                        &mut (*lfs).rcache,
                         cfg.block_size,
                         dir.pair[0],
                         off + 4,
@@ -560,7 +566,7 @@ pub fn lfs_dir_fetchmatch(
                     let err = lfs_bd_read(
                         lfs,
                         core::ptr::null(),
-                        &mut lfs.rcache,
+                        &mut (*lfs).rcache,
                         cfg.block_size,
                         dir.pair[0],
                         off + 4,
@@ -623,7 +629,7 @@ pub fn lfs_dir_fetchmatch(
                 let err = lfs_bd_crc(
                     lfs,
                     core::ptr::null(),
-                    &mut lfs.rcache,
+                    &mut (*lfs).rcache,
                     cfg.block_size,
                     dir.pair[0],
                     dir.off,
@@ -636,11 +642,11 @@ pub fn lfs_dir_fetchmatch(
                 dir.erased = fcrc_ == fcrc.crc;
             }
 
-            if lfs_gstate_hasmovehere(&lfs.gdisk, &dir.pair) {
-                if lfs_tag_id(lfs.gdisk.tag) == lfs_tag_id(besttag as lfs_tag_t) {
+            if lfs_gstate_hasmovehere(&(*lfs).gdisk, &dir.pair) {
+                if lfs_tag_id((*lfs).gdisk.tag) == lfs_tag_id(besttag as lfs_tag_t) {
                     besttag = (besttag as u32 | 0x8000_0000) as lfs_stag_t;
                 } else if besttag != -1
-                    && lfs_tag_id(lfs.gdisk.tag) < lfs_tag_id(besttag as lfs_tag_t)
+                    && lfs_tag_id((*lfs).gdisk.tag) < lfs_tag_id(besttag as lfs_tag_t)
                 {
                     besttag -= lfs_mktag(0, 1, 0) as lfs_stag_t;
                 }
@@ -704,7 +710,11 @@ pub fn lfs_dir_fetchmatch(
 ///             (lfs_tag_t)-1, (lfs_tag_t)-1, NULL, NULL, NULL);
 /// }
 /// ```
-pub fn lfs_dir_fetch(lfs: *mut crate::fs::Lfs, dir: *mut LfsMdir, pair: &[lfs_block_t; 2]) -> i32 {
+pub fn lfs_dir_fetch(
+    lfs: *mut crate::fs::Lfs,
+    dir: *mut LfsMdir,
+    pair: *const [lfs_block_t; 2],
+) -> i32 {
     let res = lfs_dir_fetchmatch(
         lfs as *mut _ as *const core::ffi::c_void,
         dir,
@@ -825,7 +835,7 @@ pub fn lfs_dir_getinfo(
     }
     unsafe {
         let info = &mut *info;
-        let lfs = &*lfs;
+        let name_max = (*lfs).name_max;
         let dir_ref = &*dir;
 
         // C: lfs.c:1415-1420
@@ -837,9 +847,8 @@ pub fn lfs_dir_getinfo(
         }
 
         // C: lfs.c:1422-1426
-        let name_max = lfs.name_max;
         let tag = lfs_dir_get(
-            lfs as *const _ as *mut _,
+            lfs,
             dir,
             lfs_mktag(0x780, 0x3ff, 0),
             lfs_mktag(LFS_TYPE_NAME, id as u32, name_max + 1),
@@ -854,7 +863,7 @@ pub fn lfs_dir_getinfo(
         // C: lfs.c:1430-1441
         let mut ctz = LfsCtz { head: 0, size: 0 };
         let tag = lfs_dir_get(
-            lfs as *const _ as *mut _,
+            lfs,
             dir,
             lfs_mktag(0x700, 0x3ff, 0),
             lfs_mktag(LFS_TYPE_STRUCT, id as u32, mem::size_of::<LfsCtz>() as u32),

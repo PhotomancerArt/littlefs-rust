@@ -146,14 +146,16 @@ pub fn lfs_bd_read(
     size: lfs_size_t,
 ) -> i32 {
     unsafe {
-        let lfs = &mut *lfs;
-        let cfg = &*lfs.cfg;
+        // The caches may be fields of `lfs`. Borrow only the disjoint
+        // configuration/count, not the whole filesystem while using them.
+        let cfg = &*(*lfs).cfg;
+        let block_count = (*lfs).block_count;
         let read = match cfg.read {
             Some(f) => f,
             None => return LFS_ERR_CORRUPT,
         };
 
-        if off + size > cfg.block_size || (lfs.block_count != 0 && block >= lfs.block_count) {
+        if off + size > cfg.block_size || (block_count != 0 && block >= block_count) {
             return crate::lfs_err!(LFS_ERR_CORRUPT);
         }
 
@@ -219,7 +221,7 @@ pub fn lfs_bd_read(
                 continue;
             }
 
-            crate::lfs_assert!(lfs.block_count == 0 || block < lfs.block_count);
+            crate::lfs_assert!(block_count == 0 || block < block_count);
             rcache.block = block;
             rcache.off = lfs_aligndown(off, cfg.read_size);
             rcache.size = lfs_min(
@@ -445,12 +447,12 @@ pub fn lfs_bd_flush(
 
     unsafe {
         let lfs_ptr = lfs;
-        let lfs = &*lfs;
+        let cfg = &*(*lfs).cfg;
+        let block_count = (*lfs).block_count;
         let pcache = &mut *pcache;
-        let cfg = &*lfs.cfg;
 
         if pcache.block != crate::types::LFS_BLOCK_NULL && pcache.block != LFS_BLOCK_INLINE {
-            crate::lfs_assert!(pcache.block < lfs.block_count);
+            crate::lfs_assert!(pcache.block < block_count);
             let diff = lfs_alignup(pcache.size, cfg.prog_size);
             crate::lfs_trace!(
                 "bd_prog block={} off={} size={}",
@@ -613,11 +615,11 @@ pub fn lfs_bd_prog(
     use crate::util::{lfs_aligndown, lfs_max, lfs_min};
 
     unsafe {
-        let lfs = &*lfs;
-        let cfg = &*lfs.cfg;
+        let cfg = &*(*lfs).cfg;
+        let block_count = (*lfs).block_count;
         let pcache = &mut *pcache;
 
-        crate::lfs_assert!(block == LFS_BLOCK_INLINE || block < lfs.block_count);
+        crate::lfs_assert!(block == LFS_BLOCK_INLINE || block < block_count);
         crate::lfs_assert!(off + size <= cfg.block_size);
 
         let mut data = buffer;
