@@ -129,7 +129,7 @@ pub fn lfs_dir_commitattr(
         }
 
         let ntag = lfs_tobe32((tag & 0x7fff_ffff) ^ commit_ref.ptag);
-        let mut err = lfs_dir_commitprog(lfs, commit, &ntag as *const _ as *const _, 4);
+        let mut err = lfs_dir_commitprog(lfs, commit_ref, &ntag as *const _ as *const _, 4);
         if err != 0 {
             return crate::lfs_pass_err!(err);
         }
@@ -153,7 +153,7 @@ pub fn lfs_dir_commitattr(
         }
 
         if lfs_tag_isvalid(tag) {
-            err = lfs_dir_commitprog(lfs, commit, buffer, dsize.saturating_sub(4));
+            err = lfs_dir_commitprog(lfs, commit_ref, buffer, dsize.saturating_sub(4));
             if err != 0 {
                 return crate::lfs_pass_err!(err);
             }
@@ -176,7 +176,7 @@ pub fn lfs_dir_commitattr(
                 if err != 0 {
                     return crate::lfs_pass_err!(err);
                 }
-                err = lfs_dir_commitprog(lfs, commit, &dat as *const _ as *const _, 1);
+                err = lfs_dir_commitprog(lfs, commit_ref, &dat as *const _ as *const _, 1);
                 if err != 0 {
                     return crate::lfs_pass_err!(err);
                 }
@@ -566,7 +566,7 @@ pub unsafe fn lfs_dir_alloc(lfs: *mut crate::fs::Lfs, dir: *mut LfsMdir) -> i32 
     use crate::util::{lfs_alignup, lfs_fromle32};
 
     unsafe {
-        let lfs_ref = &*lfs;
+        let cfg = (*lfs).cfg;
         let dir_ref = &mut *dir;
 
         for i in 0..2 {
@@ -595,8 +595,8 @@ pub unsafe fn lfs_dir_alloc(lfs: *mut crate::fs::Lfs, dir: *mut LfsMdir) -> i32 
             return crate::lfs_pass_err!(err);
         }
 
-        if lfs_ref.cfg.as_ref().is_some_and(|c| c.block_cycles > 0) {
-            let modulus = (lfs_ref.cfg.as_ref().unwrap().block_cycles as u32 + 1) | 1;
+        if cfg.as_ref().is_some_and(|c| c.block_cycles > 0) {
+            let modulus = (cfg.as_ref().unwrap().block_cycles as u32 + 1) | 1;
             dir_ref.rev = lfs_alignup(dir_ref.rev, modulus);
         }
 
@@ -1040,6 +1040,10 @@ pub fn lfs_dir_compact(
     };
 
     unsafe {
+        // Compaction traverses the previously committed directory, which may
+        // be the same object as the destination being updated below.
+        let source_snapshot = *source;
+        let source = &source_snapshot as *const LfsMdir;
         let mut relocated = false;
         let mut relocate_count: u32 = 0;
         let mut tired = lfs_dir_needsrelocation(lfs, dir);
@@ -1258,7 +1262,7 @@ pub fn lfs_dir_compact(
             lfs_gstate_xor(&mut delta, &(*lfs).gdelta);
             delta.tag &= !lfs_mktag(0, 0, 0x3ff);
 
-            err = lfs_dir_getgstate(lfs, dir, &mut delta);
+            err = lfs_dir_getgstate(lfs, dir_ref, &mut delta);
             if err != 0 {
                 return crate::lfs_pass_err!(err);
             }
@@ -1861,7 +1865,7 @@ pub fn lfs_dir_relocatingcommit(
             let mut commit_commit: (*mut Lfs, *mut LfsCommit) = (lfs, &mut commit as *mut _);
             let err = lfs_dir_traverse(
                 lfs,
-                dir,
+                dir_ref,
                 dir_ref.off,
                 dir_ref.etag,
                 attrs,
@@ -1886,7 +1890,7 @@ pub fn lfs_dir_relocatingcommit(
                 lfs_gstate_xor(&mut delta, &(*lfs).gdelta);
                 delta.tag &= !lfs_mktag(0, 0, 0x3ff);
                 if !lfs_gstate_iszero(&delta) {
-                    let err2 = lfs_dir_getgstate(lfs, dir, &mut delta);
+                    let err2 = lfs_dir_getgstate(lfs, dir_ref, &mut delta);
                     if err2 != 0 {
                         return err2;
                     }

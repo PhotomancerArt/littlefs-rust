@@ -1,6 +1,7 @@
-use alloc::boxed::Box;
+use alloc::rc::Rc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 
@@ -12,7 +13,7 @@ use crate::metadata::{OpenFlags, SeekFrom};
 use crate::storage::Storage;
 
 pub(crate) struct FileAllocation {
-    pub(crate) file: MaybeUninit<LfsFile>,
+    pub(crate) file: UnsafeCell<MaybeUninit<LfsFile>>,
     _cache: Vec<u8>,
     pub(crate) file_config: LfsFileConfig,
 }
@@ -26,7 +27,7 @@ impl FileAllocation {
             attr_count: 0,
         };
         Self {
-            file: MaybeUninit::zeroed(),
+            file: UnsafeCell::new(MaybeUninit::zeroed()),
             _cache: cache,
             file_config,
         }
@@ -39,19 +40,22 @@ impl FileAllocation {
 /// [`File::close`] explicitly to check for errors.
 pub struct File<'a, S: Storage> {
     fs: &'a Filesystem<S>,
-    alloc: Box<FileAllocation>,
+    // Core retains this handle in its open-file list. Rc keeps its address
+    // stable without exclusive Box reborrows; UnsafeCell permits mutation
+    // through the shared File API while the filesystem RefCell serializes it.
+    alloc: Rc<FileAllocation>,
     closed: bool,
 }
 
 impl<'a, S: Storage> File<'a, S> {
     pub(crate) fn open(fs: &'a Filesystem<S>, path: &str, flags: OpenFlags) -> Result<Self, Error> {
-        let mut alloc = Box::new(FileAllocation::new(fs.cache_size()));
+        let alloc = Rc::new(FileAllocation::new(fs.cache_size()));
         let path_bytes = null_terminate(path);
         {
             let mut inner = fs.inner.borrow_mut();
             let rc = littlefs_rust_core::lfs_file_opencfg(
                 inner.lfs.as_mut_ptr(),
-                alloc.file.as_mut_ptr(),
+                alloc.file.get().cast::<LfsFile>(),
                 path_bytes.as_ptr(),
                 flags.bits() as i32,
                 &alloc.file_config as *const LfsFileConfig,
@@ -71,7 +75,7 @@ impl<'a, S: Storage> File<'a, S> {
         let mut inner = self.fs.inner.borrow_mut();
         let rc = littlefs_rust_core::lfs_file_read(
             inner.lfs.as_mut_ptr(),
-            self.alloc.file.as_ptr() as *mut LfsFile,
+            self.alloc.file.get().cast::<LfsFile>(),
             buf.as_mut_ptr() as *mut c_void,
             buf.len() as u32,
         );
@@ -84,7 +88,7 @@ impl<'a, S: Storage> File<'a, S> {
         let mut inner = self.fs.inner.borrow_mut();
         let rc = littlefs_rust_core::lfs_file_write(
             inner.lfs.as_mut_ptr(),
-            self.alloc.file.as_ptr() as *mut LfsFile,
+            self.alloc.file.get().cast::<LfsFile>(),
             data.as_ptr() as *const c_void,
             data.len() as u32,
         );
@@ -111,7 +115,7 @@ impl<'a, S: Storage> File<'a, S> {
         let mut inner = self.fs.inner.borrow_mut();
         let rc = littlefs_rust_core::lfs_file_seek(
             inner.lfs.as_mut_ptr(),
-            self.alloc.file.as_ptr() as *mut LfsFile,
+            self.alloc.file.get().cast::<LfsFile>(),
             off,
             whence,
         );
@@ -124,7 +128,7 @@ impl<'a, S: Storage> File<'a, S> {
         let mut inner = self.fs.inner.borrow_mut();
         let rc = littlefs_rust_core::lfs_file_tell(
             inner.lfs.as_mut_ptr(),
-            self.alloc.file.as_ptr() as *mut LfsFile,
+            self.alloc.file.get().cast::<LfsFile>(),
         );
         drop(inner);
         rc as u32
@@ -135,7 +139,7 @@ impl<'a, S: Storage> File<'a, S> {
         let mut inner = self.fs.inner.borrow_mut();
         let rc = littlefs_rust_core::lfs_file_size(
             inner.lfs.as_mut_ptr(),
-            self.alloc.file.as_ptr() as *mut LfsFile,
+            self.alloc.file.get().cast::<LfsFile>(),
         );
         drop(inner);
         rc as u32
@@ -146,7 +150,7 @@ impl<'a, S: Storage> File<'a, S> {
         let mut inner = self.fs.inner.borrow_mut();
         let rc = littlefs_rust_core::lfs_file_sync(
             inner.lfs.as_mut_ptr(),
-            self.alloc.file.as_ptr() as *mut LfsFile,
+            self.alloc.file.get().cast::<LfsFile>(),
         );
         drop(inner);
         from_lfs_result(rc)
@@ -157,7 +161,7 @@ impl<'a, S: Storage> File<'a, S> {
         let mut inner = self.fs.inner.borrow_mut();
         let rc = littlefs_rust_core::lfs_file_truncate(
             inner.lfs.as_mut_ptr(),
-            self.alloc.file.as_ptr() as *mut LfsFile,
+            self.alloc.file.get().cast::<LfsFile>(),
             size,
         );
         drop(inner);
@@ -172,7 +176,7 @@ impl<'a, S: Storage> File<'a, S> {
         let mut inner = self.fs.inner.borrow_mut();
         let rc = littlefs_rust_core::lfs_file_close(
             inner.lfs.as_mut_ptr(),
-            self.alloc.file.as_ptr() as *mut LfsFile,
+            self.alloc.file.get().cast::<LfsFile>(),
         );
         from_lfs_result(rc)
     }
@@ -184,7 +188,7 @@ impl<S: Storage> Drop for File<'_, S> {
             if let Ok(mut inner) = self.fs.inner.try_borrow_mut() {
                 let _ = littlefs_rust_core::lfs_file_close(
                     inner.lfs.as_mut_ptr(),
-                    self.alloc.file.as_ptr() as *mut LfsFile,
+                    self.alloc.file.get().cast::<LfsFile>(),
                 );
             }
         }
